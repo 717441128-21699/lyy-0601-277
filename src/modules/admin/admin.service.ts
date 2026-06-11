@@ -5,69 +5,132 @@ interface DateRange {
   endDate?: string;
 }
 
+function parseDate(dateStr?: string): Date | null {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 function buildDateFilter(startDate?: string, endDate?: string) {
+  const start = parseDate(startDate);
+  const end = parseDate(endDate);
   const filter: any = {};
-  if (startDate) filter.gte = new Date(startDate);
-  if (endDate) filter.lte = new Date(endDate);
+  if (start) filter.gte = start;
+  if (end) filter.lte = end;
   return Object.keys(filter).length > 0 ? filter : undefined;
 }
 
+function isFutureRange(startDate?: string, endDate?: string): boolean {
+  const now = new Date();
+  const start = parseDate(startDate);
+  const end = parseDate(endDate);
+
+  if (start && start > now) return true;
+  if (end && end > now && (!start || start >= now)) return true;
+  return false;
+}
+
+const OPEN_CONSULT_STATUSES = ['OPEN', 'IN_PROGRESS'];
+const CLOSED_CONSULT_STATUSES = ['RESOLVED', 'CLOSED'];
+const OPEN_COMPLAINT_STATUSES = ['RECEIVED', 'UNDER_INVESTIGATION', 'ASSIGNED', 'IN_PROGRESS'];
+const CLOSED_COMPLAINT_STATUSES = ['RESOLVED', 'CLOSED'];
+const OPEN_WORKORDER_STATUSES = ['CREATED', 'ASSIGNED', 'IN_PROGRESS', 'PENDING_PARTS', 'PENDING_APPROVAL'];
+const CLOSED_WORKORDER_STATUSES = ['RESOLVED', 'COMPLETED', 'CANCELLED'];
+
 export async function getOverallStats(range?: DateRange) {
-  const createdAt = buildDateFilter(range?.startDate, range?.endDate);
+  const { startDate, endDate } = range || {};
+
+  if (isFutureRange(startDate, endDate)) {
+    return {
+      consultation: { total: 0, open: 0, resolved: 0 },
+      complaint: { total: 0, open: 0, resolved: 0 },
+      workOrder: { total: 0, open: 0, completed: 0, overdue: 0 },
+      satisfaction: { avgScore: 0 },
+      isFutureRange: true,
+    };
+  }
+
+  const createdAtFilter = buildDateFilter(startDate, endDate);
+  const start = parseDate(startDate);
+  const end = parseDate(endDate);
+
+  const whereCreated = createdAtFilter ? { createdAt: createdAtFilter } : undefined;
 
   const [
     totalConsultations,
-    openConsultations,
     totalComplaints,
-    openComplaints,
     totalWorkOrders,
-    openWorkOrders,
-    overdueWorkOrders,
   ] = await Promise.all([
-    prisma.consultation.count({ where: createdAt ? { createdAt } : undefined }),
-    prisma.consultation.count({
-      where: {
-        status: { in: ['OPEN', 'IN_PROGRESS'] },
-        ...(createdAt ? {} : {}),
-      },
-    }),
-    prisma.complaint.count({ where: createdAt ? { createdAt } : undefined }),
-    prisma.complaint.count({
-      where: {
-        status: { in: ['RECEIVED', 'UNDER_INVESTIGATION', 'ASSIGNED', 'IN_PROGRESS'] },
-      },
-    }),
-    prisma.workOrder.count({ where: createdAt ? { createdAt } : undefined }),
-    prisma.workOrder.count({
-      where: {
-        status: { in: ['CREATED', 'ASSIGNED', 'IN_PROGRESS', 'PENDING_PARTS', 'PENDING_APPROVAL'] },
-      },
-    }),
-    prisma.workOrder.count({
-      where: {
-        promisedDeadline: { lt: new Date() },
-        status: { in: ['CREATED', 'ASSIGNED', 'IN_PROGRESS', 'PENDING_PARTS', 'PENDING_APPROVAL'] },
-      },
-    }),
+    prisma.consultation.count({ where: whereCreated }),
+    prisma.complaint.count({ where: whereCreated }),
+    prisma.workOrder.count({ where: whereCreated }),
   ]);
 
-  const avgSatisfaction = await getAverageSatisfaction();
+  const whereOpenConsult: any = { ...whereCreated };
+  whereOpenConsult.status = { in: OPEN_CONSULT_STATUSES };
+  const whereClosedConsult: any = { ...whereCreated };
+  whereClosedConsult.status = { in: CLOSED_CONSULT_STATUSES };
+
+  const whereOpenComplaint: any = { ...whereCreated };
+  whereOpenComplaint.status = { in: OPEN_COMPLAINT_STATUSES };
+  const whereClosedComplaint: any = { ...whereCreated };
+  whereClosedComplaint.status = { in: CLOSED_COMPLAINT_STATUSES };
+
+  const whereOpenWorkOrder: any = { ...whereCreated };
+  whereOpenWorkOrder.status = { in: OPEN_WORKORDER_STATUSES };
+  const whereClosedWorkOrder: any = { ...whereCreated };
+  whereClosedWorkOrder.status = { in: CLOSED_WORKORDER_STATUSES };
+
+  const whereOverdueWorkOrder: any = { ...whereCreated };
+  whereOverdueWorkOrder.status = { in: OPEN_WORKORDER_STATUSES };
+  if (start && end) {
+    whereOverdueWorkOrder.promisedDeadline = {
+      gte: start,
+      lte: end,
+    };
+  } else if (start) {
+    whereOverdueWorkOrder.promisedDeadline = { gte: start, lt: new Date() };
+  } else if (end) {
+    whereOverdueWorkOrder.promisedDeadline = { lte: end };
+  } else {
+    whereOverdueWorkOrder.promisedDeadline = { lt: new Date() };
+  }
+
+  const [
+    openConsultations,
+    closedConsultations,
+    openComplaints,
+    closedComplaints,
+    openWorkOrders,
+    closedWorkOrders,
+    overdueWorkOrders,
+  ] = await Promise.all([
+    prisma.consultation.count({ where: whereOpenConsult }),
+    prisma.consultation.count({ where: whereClosedConsult }),
+    prisma.complaint.count({ where: whereOpenComplaint }),
+    prisma.complaint.count({ where: whereClosedComplaint }),
+    prisma.workOrder.count({ where: whereOpenWorkOrder }),
+    prisma.workOrder.count({ where: whereClosedWorkOrder }),
+    prisma.workOrder.count({ where: whereOverdueWorkOrder }),
+  ]);
+
+  const avgSatisfaction = await getAverageSatisfaction(startDate, endDate);
 
   return {
     consultation: {
       total: totalConsultations,
       open: openConsultations,
-      resolved: totalConsultations - openConsultations,
+      resolved: closedConsultations,
     },
     complaint: {
       total: totalComplaints,
       open: openComplaints,
-      resolved: totalComplaints - openComplaints,
+      resolved: closedComplaints,
     },
     workOrder: {
       total: totalWorkOrders,
       open: openWorkOrders,
-      completed: totalWorkOrders - openWorkOrders,
+      completed: closedWorkOrders,
       overdue: overdueWorkOrders,
     },
     satisfaction: {
@@ -76,20 +139,23 @@ export async function getOverallStats(range?: DateRange) {
   };
 }
 
-async function getAverageSatisfaction() {
+async function getAverageSatisfaction(startDate?: string, endDate?: string) {
+  const createdAtFilter = buildDateFilter(startDate, endDate);
+  const baseWhere = createdAtFilter ? { createdAt: createdAtFilter } : undefined;
+
   const [consultationStats, complaintStats, workOrderStats] = await Promise.all([
     prisma.consultation.aggregate({
-      where: { satisfaction: { not: null } },
+      where: { ...baseWhere, satisfaction: { not: null } } as any,
       _avg: { satisfaction: true },
       _count: { satisfaction: true },
     }),
     prisma.complaint.aggregate({
-      where: { satisfaction: { not: null } },
+      where: { ...baseWhere, satisfaction: { not: null } } as any,
       _avg: { satisfaction: true },
       _count: { satisfaction: true },
     }),
     prisma.workOrder.aggregate({
-      where: { satisfaction: { not: null } },
+      where: { ...baseWhere, satisfaction: { not: null } } as any,
       _avg: { satisfaction: true },
       _count: { satisfaction: true },
     }),
@@ -112,7 +178,7 @@ async function getAverageSatisfaction() {
 
 export async function getSatisfactionStats() {
   const satisfactionLevels = [5, 4, 3, 2, 1];
-  
+
   const [consultationStats, complaintStats, workOrderStats] = await Promise.all([
     Promise.all(
       satisfactionLevels.map((level) =>
@@ -159,26 +225,36 @@ export async function getSatisfactionStats() {
   };
 }
 
-export async function getFAQCategoryStats() {
-  const consultationByCategory = await prisma.consultation.groupBy({
-    by: ['category'],
-    _count: true,
-    orderBy: { _count: { category: 'desc' } },
+export async function getFAQCategories() {
+  const categories = await prisma.fAQCategory.findMany({
+    where: { isActive: true },
+    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    select: {
+      id: true,
+      name: true,
+      description: true,
+      sortOrder: true,
+      isActive: true,
+      parentId: true,
+    },
   });
 
-  const complaintByCategory = await prisma.complaint.groupBy({
-    by: ['category'],
-    _count: true,
-    orderBy: { _count: { category: 'desc' } },
-  });
+  const [consultationByCategory, complaintByCategory, workOrderByCategory] = await Promise.all([
+    prisma.consultation.groupBy({
+      by: ['category'],
+      _count: true,
+    }),
+    prisma.complaint.groupBy({
+      by: ['category'],
+      _count: true,
+    }),
+    prisma.workOrder.groupBy({
+      by: ['category'],
+      _count: true,
+    }),
+  ]);
 
-  const workOrderByCategory = await prisma.workOrder.groupBy({
-    by: ['category'],
-    _count: true,
-    orderBy: { _count: { category: 'desc' } },
-  });
-
-  return {
+  const stats = {
     consultationByCategory: consultationByCategory.map((c) => ({
       category: c.category,
       count: c._count,
@@ -191,6 +267,11 @@ export async function getFAQCategoryStats() {
       category: c.category,
       count: c._count,
     })),
+  };
+
+  return {
+    categories,
+    stats,
   };
 }
 

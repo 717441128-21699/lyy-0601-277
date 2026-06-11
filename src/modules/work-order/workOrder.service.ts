@@ -191,6 +191,7 @@ export async function updateWorkOrder(id: string, data: UpdateWorkOrderInput, op
     await prisma.workOrderStatusLog.create({
       data: {
         workOrderId: id,
+        toStatus: workOrder.status,
         progress: data.progress,
         remarks: data.remarks,
         operatorId,

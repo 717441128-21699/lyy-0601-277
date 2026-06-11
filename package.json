@@ -5,12 +5,14 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev --name init",
-    "prisma:seed": "ts-node prisma/seed.ts",
-    "db:setup": "npm run prisma:migrate && npm run prisma:generate && npm run prisma:seed"
+    "prisma:seed": "ts-node --project tsconfig-seed.json prisma/seed.ts",
+    "db:setup": "npm run prisma:migrate && npm run prisma:generate && npm run prisma:seed",
+    "clean": "node -e \"try { require('fs').rmSync('dist', { recursive: true, force: true }); console.log('dist cleaned'); } catch(e) { console.log('no dist to clean'); }\"",
+    "rebuild": "npm run clean && npm run build"
   },
   "keywords": ["rental", "customer-service", "backend"],
   "author": "",

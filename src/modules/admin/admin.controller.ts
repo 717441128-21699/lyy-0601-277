@@ -3,7 +3,7 @@ import { success } from '../../utils/response';
 import {
   getOverallStats,
   getSatisfactionStats,
-  getFAQCategoryStats,
+  getFAQCategories as getFAQCategoriesService,
   getAgentPerformanceStats,
   getAdminTodo,
   getOverdueWorkOrders,
@@ -24,8 +24,8 @@ export async function getSatisfaction(req: Request, res: Response) {
 }
 
 export async function getFAQCategories(req: Request, res: Response) {
-  const stats = await getFAQCategoryStats();
-  return success(res, stats, '查询成功');
+  const data = await getFAQCategoriesService();
+  return success(res, data, '查询成功');
 }
 
 export async function getAgentPerformance(req: Request, res: Response) {
